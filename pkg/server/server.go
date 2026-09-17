@@ -17,6 +17,7 @@ type Server struct {
 	mcpServer    *mcp.Server
 	mythicClient *mythic.Client
 	fileStore    *filestore.FileStore
+	toolNames    []string
 }
 
 // NewServer creates a new MCP server with Mythic integration
@@ -119,40 +120,46 @@ func (s *Server) FileStore() *filestore.FileStore {
 	return s.fileStore
 }
 
-// registerTools registers all MCP tools
-func (s *Server) registerTools() {
-	// Phase 1: Authentication tools
-	s.registerAuthTools()
+func (s *Server) ToolNames() []string {
+	out := make([]string, len(s.toolNames))
+	copy(out, s.toolNames)
+	return out
+}
 
-	// Phase 2: Operations, Files, Operators, Tags, Credentials, Artifacts tools
+func (s *Server) trackTool(name string) {
+	s.toolNames = append(s.toolNames, name)
+}
+
+// registerTools registers MCP tools. Default profile is operator (slim).
+func (s *Server) registerTools() {
+	if s.config != nil && s.config.OperatorProfile() {
+		s.registerOperatorProfile()
+		return
+	}
+	s.registerFullProfile()
+}
+
+func (s *Server) registerFullProfile() {
+	s.registerAuthTools()
 	s.registerOperationsTools()
 	s.registerFilesTools()
 	s.registerOperatorsTools()
 	s.registerTagsTools()
 	s.registerCredentialsTools()
 	s.registerArtifactsTools()
-
-	// Phase 3: Callbacks, Tasks, Responses, Payloads, C2 Profiles, and Commands tools
 	s.registerCallbacksTools()
 	s.registerTasksTools()
 	s.registerPayloadsTools()
 	s.registerPayloadDiscoveryTools()
 	s.registerC2ProfilesTools()
 	s.registerCommandsTools()
-
-	// Phase 3 COMPLETE! ✅
-	// Total Phase 3 tools: 54 tools implemented
-
-	// Phase 4: Advanced Features - MITRE ATT&CK, Processes, Hosts, etc.
 	s.registerAttackTools()
 	s.registerProcessesTools()
 	s.registerHostsTools()
 	s.registerScreenshotsTools()
 	s.registerKeylogsTools()
-
-	// Phase 5: Documentation tools
 	s.registerDocumentationTools()
-
-	// Phase 6: Bulk operation tools
 	s.registerBulkTools()
+	s.registerServicesTools()
+	s.registerCLITools()
 }

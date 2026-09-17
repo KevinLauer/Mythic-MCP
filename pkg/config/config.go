@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -17,8 +18,13 @@ type Config struct {
 	SkipTLSVerify bool
 
 	// Server settings
-	LogLevel string
-	Timeout  time.Duration
+	LogLevel   string
+	Timeout    time.Duration
+	MCPProfile string
+
+	// Optional mythic-cli on the Mythic host (never SSH)
+	CLIPath    string
+	MythicHome string
 
 	// File vending settings
 	FileVendingEnabled  bool
@@ -31,19 +37,22 @@ type Config struct {
 
 // LoadFromEnv loads configuration from environment variables
 func LoadFromEnv() (*Config, error) {
+	ssl := getEnvBool("MYTHIC_SSL", true)
 	cfg := &Config{
-		MythicURL:     os.Getenv("MYTHIC_URL"),
-		APIToken:      os.Getenv("MYTHIC_API_TOKEN"),
+		MythicURL:     mythicURLFromEnv(ssl),
+		APIToken:      firstEnv("MYTHIC_API_TOKEN", "MYTHIC_APITOKEN"),
 		Username:      os.Getenv("MYTHIC_USERNAME"),
 		Password:      os.Getenv("MYTHIC_PASSWORD"),
-		SSL:           getEnvBool("MYTHIC_SSL", true),
+		SSL:           ssl,
 		SkipTLSVerify: getEnvBool("MYTHIC_SKIP_TLS_VERIFY", false),
 		LogLevel:      getEnvString("LOG_LEVEL", "info"),
 		Timeout:       getEnvDuration("TIMEOUT", 30*time.Second),
+		MCPProfile:    getEnvString("MYTHIC_MCP_PROFILE", "operator"),
+		CLIPath:       os.Getenv("MYTHIC_CLI_PATH"),
+		MythicHome:    os.Getenv("MYTHIC_HOME"),
 
-		// File vending defaults
 		FileVendingEnabled:  getEnvBool("FILE_VENDING_ENABLED", true),
-		FileVendingBaseURL:  getEnvString("FILE_VENDING_BASE_URL", ""), // auto-detected if empty
+		FileVendingBaseURL:  getEnvString("FILE_VENDING_BASE_URL", ""),
 		FileStoragePath:     getEnvString("FILE_STORAGE_PATH", "/tmp/mythic-files"),
 		FileTokenExpiry:     getEnvDuration("FILE_TOKEN_EXPIRY", 5*time.Minute),
 		FileMaxSizeMB:       getEnvInt("FILE_MAX_SIZE_MB", 100),
@@ -55,6 +64,36 @@ func LoadFromEnv() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func (c *Config) OperatorProfile() bool {
+	profile := strings.ToLower(strings.TrimSpace(c.MCPProfile))
+	return profile == "" || profile == "operator"
+}
+
+func mythicURLFromEnv(ssl bool) string {
+	if u := os.Getenv("MYTHIC_URL"); u != "" {
+		return u
+	}
+	ip := os.Getenv("MYTHIC_IP")
+	if ip == "" {
+		return ""
+	}
+	port := getEnvString("MYTHIC_PORT", "7443")
+	scheme := "https"
+	if !ssl {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s:%s", scheme, ip, port)
+}
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // Validate checks that required configuration is present.

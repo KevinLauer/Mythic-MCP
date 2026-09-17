@@ -65,10 +65,10 @@ func main() {
 		cancel()
 	}()
 
-	// Choose transport based on MCP_TRANSPORT env var (default: "http")
+	// Cursor/OpenCode spawn over stdio. HTTP is opt-in for remote hosts.
 	transport := os.Getenv("MCP_TRANSPORT")
 	if transport == "" {
-		transport = "http"
+		transport = "stdio"
 	}
 
 	switch transport {

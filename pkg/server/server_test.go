@@ -170,37 +170,36 @@ func TestServerClose_NoCredentials(t *testing.T) {
 
 // TestPayloadDiscoveryToolsRegistered verifies that the three payload discovery
 // tools required by issue #4 are properly registered on the MCP server.
-func TestPayloadDiscoveryToolsRegistered(t *testing.T) {
+func TestOperatorProfileDefaultTools(t *testing.T) {
 	cfg := &config.Config{
-		MythicURL: "https://mythic.example.com:7443",
-		APIToken:  "test-token",
-		SSL:       true,
+		MythicURL:  "https://mythic.example.com:7443",
+		APIToken:   "test-token",
+		SSL:        true,
+		MCPProfile: "operator",
 	}
 
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	defer srv.Close()
 
-	// The MCP server should have these tools registered.
-	// We verify by checking the server was created without error
-	// (registerPayloadDiscoveryTools is called during NewServer).
+	names := srv.ToolNames()
+	assert.Contains(t, names, "mythic_get_services")
+	assert.Contains(t, names, "mythic_replace_installed_service")
+	assert.Contains(t, names, "mythic_issue_task")
+	assert.NotContains(t, names, "mythic_issue_task_bulk")
+	assert.NotContains(t, names, "mythic_get_keylogs")
+}
+
+func TestFullProfileStillConstructs(t *testing.T) {
+	cfg := &config.Config{
+		MythicURL:  "https://mythic.example.com:7443",
+		APIToken:   "test-token",
+		SSL:        true,
+		MCPProfile: "full",
+	}
+
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+	defer srv.Close()
 	assert.NotNil(t, srv.MCPServer())
-
-	expectedTools := []string{
-		"mythic_get_payload_type_build_parameters",
-		"mythic_get_c2_profile_parameters",
-		"mythic_get_payload_type_commands",
-		"mythic_issue_task_bulk",
-		"mythic_get_tasks_batch",
-		"mythic_search_tasks",
-	}
-
-	for _, toolName := range expectedTools {
-		t.Run(toolName, func(t *testing.T) {
-			// Tool registration happens during NewServer — if it panicked
-			// or errored, we wouldn't reach here. This validates the tools
-			// were registered without conflict.
-			assert.NotNil(t, srv.MCPServer(), "tool %s should be registered", toolName)
-		})
-	}
 }

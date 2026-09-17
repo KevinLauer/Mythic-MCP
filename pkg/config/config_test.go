@@ -14,10 +14,14 @@ func TestLoadFromEnv(t *testing.T) {
 	origEnv := map[string]string{
 		"MYTHIC_URL":             os.Getenv("MYTHIC_URL"),
 		"MYTHIC_API_TOKEN":       os.Getenv("MYTHIC_API_TOKEN"),
+		"MYTHIC_APITOKEN":        os.Getenv("MYTHIC_APITOKEN"),
+		"MYTHIC_IP":              os.Getenv("MYTHIC_IP"),
+		"MYTHIC_PORT":            os.Getenv("MYTHIC_PORT"),
 		"MYTHIC_USERNAME":        os.Getenv("MYTHIC_USERNAME"),
 		"MYTHIC_PASSWORD":        os.Getenv("MYTHIC_PASSWORD"),
 		"MYTHIC_SSL":             os.Getenv("MYTHIC_SSL"),
 		"MYTHIC_SKIP_TLS_VERIFY": os.Getenv("MYTHIC_SKIP_TLS_VERIFY"),
+		"MYTHIC_MCP_PROFILE":     os.Getenv("MYTHIC_MCP_PROFILE"),
 		"LOG_LEVEL":              os.Getenv("LOG_LEVEL"),
 		"TIMEOUT":                os.Getenv("TIMEOUT"),
 	}
@@ -67,6 +71,7 @@ func TestLoadFromEnv(t *testing.T) {
 
 	t.Run("MissingMythicURL", func(t *testing.T) {
 		os.Unsetenv("MYTHIC_URL")
+		os.Unsetenv("MYTHIC_IP")
 		os.Setenv("MYTHIC_API_TOKEN", "test-token")
 
 		_, err := LoadFromEnv()
@@ -86,6 +91,21 @@ func TestLoadFromEnv(t *testing.T) {
 		assert.Empty(t, cfg.APIToken)
 		assert.Empty(t, cfg.Username)
 		assert.Empty(t, cfg.Password)
+	})
+
+	t.Run("URLFromIP", func(t *testing.T) {
+		os.Unsetenv("MYTHIC_URL")
+		os.Setenv("MYTHIC_IP", "192.0.2.10")
+		os.Setenv("MYTHIC_PORT", "7443")
+		os.Setenv("MYTHIC_SSL", "true")
+		os.Setenv("MYTHIC_APITOKEN", "mtk_test")
+		os.Unsetenv("MYTHIC_API_TOKEN")
+
+		cfg, err := LoadFromEnv()
+		require.NoError(t, err)
+		assert.Equal(t, "https://192.0.2.10:7443", cfg.MythicURL)
+		assert.Equal(t, "mtk_test", cfg.APIToken)
+		assert.Equal(t, "operator", cfg.MCPProfile)
 	})
 
 	t.Run("CustomSettings", func(t *testing.T) {

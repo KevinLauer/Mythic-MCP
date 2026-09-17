@@ -8,6 +8,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 )
 
+replace github.com/nbaertsch/mythic-sdk-go => ../mythic-sdk-go
+
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/jsonschema-go v0.3.0 // indirect
