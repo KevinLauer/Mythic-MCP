@@ -6,30 +6,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"path/filepath"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type cliStatusArgs struct{}
 
+type cliVersionArgs struct{}
+
 type cliLogsArgs struct {
 	Name  string `json:"name" jsonschema:"Installed service or core container name"`
-	Lines int    `json:"lines,omitempty" jsonschema:"Optional tail length if the CLI supports it"`
+	Lines int    `json:"lines,omitempty" jsonschema:"Optional tail length passed as mythic-cli logs -l"`
 }
 
 type cliServiceArgs struct {
-	Name string `json:"name" jsonschema:"Installed service name (lowercase)"`
-}
-
-type replaceInstalledServiceArgs struct {
-	Name      string `json:"name" jsonschema:"Installed service name to replace (lowercase folder/container name)"`
-	SourceDir string `json:"source_dir,omitempty" jsonschema:"Absolute path to a local agent/profile repo for mythic-cli install folder"`
-	GithubURL string `json:"github_url,omitempty" jsonschema:"GitHub URL for mythic-cli install github"`
-	Branch    string `json:"branch,omitempty" jsonschema:"Optional git branch (Mythic-v4.0.0 for public v4 agents)"`
-	Timeout   int    `json:"timeout,omitempty" jsonschema:"Seconds to wait for container_running after install (default 180)"`
+	Name string `json:"name" jsonschema:"Installed service or core container name (lowercase)"`
 }
 
 func (s *Server) registerCLITools() {
@@ -40,22 +33,34 @@ func (s *Server) registerCLITools() {
 	s.trackTool("mythic_cli_status")
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "mythic_cli_health",
+		Description: "Run mythic-cli health <name>. Requires a container name. CLI env must be set.",
+	}, s.handleCLIHealth)
+	s.trackTool("mythic_cli_health")
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "mythic_cli_logs",
-		Description: "Run mythic-cli logs <name> when CLI env is set. Otherwise returns commands for a human.",
+		Description: "Run mythic-cli logs <name> when CLI env is set. Optional lines. Never follow (would hang).",
 	}, s.handleCLILogs)
 	s.trackTool("mythic_cli_logs")
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "mythic_cli_start",
-		Description: "Run mythic-cli start <name> when CLI env is set.",
+		Description: "Run mythic-cli start <name> when CLI env is set. Name is required so this does not start every container.",
 	}, s.handleCLIStart)
 	s.trackTool("mythic_cli_start")
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "mythic_cli_stop",
-		Description: "Run mythic-cli stop <name> when CLI env is set.",
+		Description: "Run mythic-cli stop <name> when CLI env is set. Name is required so this does not stop all of Mythic.",
 	}, s.handleCLIStop)
 	s.trackTool("mythic_cli_stop")
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "mythic_cli_restart",
+		Description: "Run mythic-cli restart <name>. Name is required. Restart with no name would bounce every Mythic container.",
+	}, s.handleCLIRestart)
+	s.trackTool("mythic_cli_restart")
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "mythic_cli_build",
@@ -64,11 +69,26 @@ func (s *Server) registerCLITools() {
 	s.trackTool("mythic_cli_build")
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
-		Name: "mythic_replace_installed_service",
-		Description: "Stop, uninstall, and reinstall a payload type or C2 profile so the old version is gone. " +
-			"Requires source_dir or github_url. Uses mythic-cli only when MYTHIC_CLI_PATH and MYTHIC_HOME are set.",
-	}, s.handleReplaceInstalledService)
-	s.trackTool("mythic_replace_installed_service")
+		Name:        "mythic_cli_version",
+		Description: "Run mythic-cli version (CLI, server VERSION file, React UI).",
+	}, s.handleCLIVersion)
+	s.trackTool("mythic_cli_version")
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name: "mythic_cli_service",
+		Description: "Install, uninstall, or update a payload type or C2 profile via mythic-cli. " +
+			"action=uninstall stops and uninstalls. action=install only installs. " +
+			"action=update is uninstall then install. Requires source_dir or github_url for install and update. " +
+			"Uses mythic-cli only when MYTHIC_CLI_PATH and MYTHIC_HOME are set.",
+	}, s.handleCLIService)
+	s.trackTool("mythic_cli_service")
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name: "mythic_cli_config",
+		Description: "mythic-cli config. subcommand=get|set|help|service|show. " +
+			"get/help need keys. set needs key+value. show dumps the full .env including passwords; prefer get.",
+	}, s.handleCLIConfig)
+	s.trackTool("mythic_cli_config")
 }
 
 func (s *Server) cliConfigured() bool {
@@ -97,179 +117,65 @@ func (s *Server) runMythicCLI(ctx context.Context, args ...string) (string, stri
 	return stdout.String(), stderr.String(), err
 }
 
-func (s *Server) handleCLIStatus(ctx context.Context, req *mcp.CallToolRequest, args cliStatusArgs) (*mcp.CallToolResult, any, error) {
-	commands := []string{"./mythic-cli status"}
+func (s *Server) runCLIOrUnavailable(ctx context.Context, display string, args ...string) (*mcp.CallToolResult, any, error) {
 	if !s.cliConfigured() {
-		return cliUnavailableResult(commands)
+		return cliUnavailableResult([]string{display})
 	}
-	return s.cliResult(ctx, commands[0], "status")
+	return s.cliResult(ctx, display, args...)
+}
+
+func (s *Server) handleCLIStatus(ctx context.Context, req *mcp.CallToolRequest, args cliStatusArgs) (*mcp.CallToolResult, any, error) {
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli status", "status")
+}
+
+func (s *Server) handleCLIVersion(ctx context.Context, req *mcp.CallToolRequest, args cliVersionArgs) (*mcp.CallToolResult, any, error) {
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli version", "version")
 }
 
 func (s *Server) handleCLILogs(ctx context.Context, req *mcp.CallToolRequest, args cliLogsArgs) (*mcp.CallToolResult, any, error) {
 	if args.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
-	commands := []string{fmt.Sprintf("./mythic-cli logs %s", args.Name)}
-	if !s.cliConfigured() {
-		return cliUnavailableResult(commands)
+	cliArgs := []string{"logs", args.Name}
+	if args.Lines > 0 {
+		cliArgs = append(cliArgs, "-l", strconv.Itoa(args.Lines))
 	}
-	return s.cliResult(ctx, commands[0], "logs", args.Name)
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli "+strings.Join(cliArgs, " "), cliArgs...)
 }
 
 func (s *Server) handleCLIStart(ctx context.Context, req *mcp.CallToolRequest, args cliServiceArgs) (*mcp.CallToolResult, any, error) {
 	if args.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
-	commands := []string{fmt.Sprintf("./mythic-cli start %s", args.Name)}
-	if !s.cliConfigured() {
-		return cliUnavailableResult(commands)
-	}
-	return s.cliResult(ctx, commands[0], "start", args.Name)
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli start "+args.Name, "start", args.Name)
 }
 
 func (s *Server) handleCLIStop(ctx context.Context, req *mcp.CallToolRequest, args cliServiceArgs) (*mcp.CallToolResult, any, error) {
 	if args.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
-	commands := []string{fmt.Sprintf("./mythic-cli stop %s", args.Name)}
-	if !s.cliConfigured() {
-		return cliUnavailableResult(commands)
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli stop "+args.Name, "stop", args.Name)
+}
+
+func (s *Server) handleCLIRestart(ctx context.Context, req *mcp.CallToolRequest, args cliServiceArgs) (*mcp.CallToolResult, any, error) {
+	if args.Name == "" {
+		return nil, nil, fmt.Errorf("name is required; restart without a name bounces all of Mythic")
 	}
-	return s.cliResult(ctx, commands[0], "stop", args.Name)
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli restart "+args.Name, "restart", args.Name)
+}
+
+func (s *Server) handleCLIHealth(ctx context.Context, req *mcp.CallToolRequest, args cliServiceArgs) (*mcp.CallToolResult, any, error) {
+	if args.Name == "" {
+		return nil, nil, fmt.Errorf("name is required")
+	}
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli health "+args.Name, "health", args.Name)
 }
 
 func (s *Server) handleCLIBuild(ctx context.Context, req *mcp.CallToolRequest, args cliServiceArgs) (*mcp.CallToolResult, any, error) {
 	if args.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
-	commands := []string{fmt.Sprintf("./mythic-cli build %s", args.Name)}
-	if !s.cliConfigured() {
-		return cliUnavailableResult(commands)
-	}
-	return s.cliResult(ctx, commands[0], "build", args.Name)
-}
-
-func (s *Server) handleReplaceInstalledService(ctx context.Context, req *mcp.CallToolRequest, args replaceInstalledServiceArgs) (*mcp.CallToolResult, any, error) {
-	if args.Name == "" {
-		return nil, nil, fmt.Errorf("name is required")
-	}
-	if args.SourceDir == "" && args.GithubURL == "" {
-		return nil, nil, fmt.Errorf("source_dir or github_url is required")
-	}
-	if args.SourceDir != "" && !filepath.IsAbs(args.SourceDir) {
-		return nil, nil, fmt.Errorf("source_dir must be an absolute path")
-	}
-
-	commands := replaceCommands(args)
-	if !s.cliConfigured() {
-		return cliUnavailableResult(commands)
-	}
-
-	steps := [][]string{
-		{"stop", args.Name},
-		{"uninstall", args.Name},
-	}
-	if args.SourceDir != "" {
-		steps = append(steps, []string{"install", "folder", args.SourceDir, "-f"})
-	} else {
-		install := []string{"install", "github", args.GithubURL}
-		if args.Branch != "" {
-			install = append(install, "-b", args.Branch)
-		}
-		install = append(install, "-f")
-		steps = append(steps, install)
-	}
-
-	outputs := make([]map[string]any, 0, len(steps)+1)
-	for _, step := range steps {
-		stdout, stderr, err := s.runMythicCLI(ctx, step...)
-		entry := map[string]any{
-			"args":   step,
-			"stdout": stdout,
-			"stderr": stderr,
-		}
-		if err != nil {
-			entry["error"] = err.Error()
-			outputs = append(outputs, entry)
-			payload := map[string]any{"ok": false, "steps": outputs}
-			text, _ := json.MarshalIndent(payload, "", "  ")
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
-			}, payload, nil
-		}
-		outputs = append(outputs, entry)
-	}
-
-	timeout := time.Duration(args.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 180 * time.Second
-	}
-	deadline := time.Now().Add(timeout)
-	running := false
-	for time.Now().Before(deadline) {
-		running = s.serviceContainerRunning(ctx, args.Name)
-		if running {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
-	}
-
-	payload := map[string]any{
-		"ok":                 running,
-		"name":               args.Name,
-		"container_running":  running,
-		"steps":              outputs,
-		"polled_services":    true,
-	}
-	if !running {
-		payload["error"] = "install finished but container_running is still false"
-	}
-	text, _ := json.MarshalIndent(payload, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
-	}, payload, nil
-}
-
-func replaceCommands(args replaceInstalledServiceArgs) []string {
-	commands := []string{
-		fmt.Sprintf("./mythic-cli stop %s", args.Name),
-		fmt.Sprintf("./mythic-cli uninstall %s", args.Name),
-	}
-	if args.SourceDir != "" {
-		commands = append(commands, fmt.Sprintf("./mythic-cli install folder %s -f", args.SourceDir))
-		return commands
-	}
-	cmd := fmt.Sprintf("./mythic-cli install github %s", args.GithubURL)
-	if args.Branch != "" {
-		cmd += " -b " + args.Branch
-	}
-	cmd += " -f"
-	return append(commands, cmd)
-}
-
-func (s *Server) serviceContainerRunning(ctx context.Context, name string) bool {
-	data, err := s.mythicClient.ExecuteRawGraphQL(ctx, servicesQuery, nil)
-	if err != nil {
-		return false
-	}
-	want := strings.ToLower(name)
-	for _, key := range []string{"payloadtype", "c2profile"} {
-		rows, _ := data[key].([]interface{})
-		for _, row := range rows {
-			m, _ := row.(map[string]interface{})
-			n, _ := m["name"].(string)
-			if strings.ToLower(n) != want {
-				continue
-			}
-			running, _ := m["container_running"].(bool)
-			return running
-		}
-	}
-	return false
+	return s.runCLIOrUnavailable(ctx, "./mythic-cli build "+args.Name, "build", args.Name)
 }
 
 func (s *Server) cliResult(ctx context.Context, display string, args ...string) (*mcp.CallToolResult, any, error) {
